@@ -155,7 +155,7 @@ import { useCollectionsStore, type Collection } from '~/stores/collections'
 import type { SteamGame } from '~/composables/useSteamGames'
 
 interface Props {
-  games: SteamGame[]
+  games: readonly SteamGame[]
 }
 
 const props = defineProps<Props>()
@@ -167,11 +167,8 @@ const newCollectionColor = ref('#3b82f6')
 const editingCollection = ref<Collection | null>(null)
 
 const allCollections = computed(() => {
-  console.log('CollectionManager: props.games.length =', props.games.length)
   if (props.games.length === 0) return []
-  const collections = collectionsStore.getAllCollections(props.games)
-  console.log('CollectionManager: allCollections =', collections)
-  return collections
+  return collectionsStore.getAllCollections(props.games)
 })
 const customCollections = computed(() => collectionsStore.collections)
 const autoCollections = computed(() => allCollections.value.filter(c => c.id.startsWith('auto-')))

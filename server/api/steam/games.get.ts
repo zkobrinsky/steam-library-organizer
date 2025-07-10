@@ -28,7 +28,8 @@ export default defineEventHandler(async (event) => {
           steamid: steamId,
           format: 'json',
           include_appinfo: 1,
-          include_played_free_games: 1
+          include_played_free_games: 1,
+          include_last_played: 1
         }
       }
     )

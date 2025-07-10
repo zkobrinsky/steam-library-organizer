@@ -122,7 +122,7 @@ export interface GameFilters {
 
 interface Props {
   filters: GameFilters
-  games: SteamGame[]
+  games: readonly SteamGame[]
 }
 
 interface Emits {

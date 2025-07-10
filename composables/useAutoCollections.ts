@@ -6,12 +6,12 @@ export interface AutoCollection {
   description: string
   color: string
   icon: string
-  games: SteamGame[]
+  games: readonly SteamGame[]
   count: number
 }
 
 export const useAutoCollections = () => {
-  const getAutoCollections = (games: SteamGame[]): AutoCollection[] => {
+  const getAutoCollections = (games: readonly SteamGame[]): AutoCollection[] => {
     const now = new Date()
     const sixMonthsAgo = new Date(now.getTime() - 6 * 30 * 24 * 60 * 60 * 1000)
     const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
@@ -117,7 +117,7 @@ export const useAutoCollections = () => {
     return collections.filter(collection => collection.count > 0)
   }
 
-  const getGamesInAutoCollection = (collectionId: string, games: SteamGame[]): SteamGame[] => {
+  const getGamesInAutoCollection = (collectionId: string, games: readonly SteamGame[]): readonly SteamGame[] => {
     const collections = getAutoCollections(games)
     const collection = collections.find(c => c.id === collectionId)
     return collection?.games || []

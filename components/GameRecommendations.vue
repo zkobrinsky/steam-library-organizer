@@ -170,7 +170,7 @@ import type { SteamGame } from '~/composables/useSteamGames'
 import type { RecommendationPreferences } from '~/composables/useRecommendations'
 
 interface Props {
-  games: SteamGame[]
+  games: readonly SteamGame[]
 }
 
 const props = defineProps<Props>()

@@ -83,7 +83,7 @@
 import type { SteamGame } from '~/composables/useSteamGames'
 
 interface Props {
-  games: SteamGame[]
+  games: readonly SteamGame[]
 }
 
 interface ChatMessage {

@@ -53,7 +53,7 @@ export const useRecommendations = () => {
   const aiInsights = ref<string>('')
   const analysis = ref<GamingAnalysis | null>(null)
 
-  const getRecommendations = async (games: SteamGame[], preferences: RecommendationPreferences = {}) => {
+  const getRecommendations = async (games: readonly SteamGame[], preferences: RecommendationPreferences = {}) => {
     loading.value = true
     error.value = null
     

@@ -13,7 +13,7 @@ export interface Collection {
 export const useCollectionsStore = defineStore('collections', () => {
   const collections = ref<Collection[]>([])
   
-  const getAllCollections = (games: SteamGame[] = []) => {
+  const getAllCollections = (games: readonly SteamGame[] = []) => {
     const { getAutoCollections } = useAutoCollections()
     const autoCollections = getAutoCollections(games)
     const customCollections = collections.value.map(c => ({
@@ -32,7 +32,7 @@ export const useCollectionsStore = defineStore('collections', () => {
     )
   }
   
-  const getGamesInCollection = (collectionId: string, allGames: SteamGame[]) => {
+  const getGamesInCollection = (collectionId: string, allGames: readonly SteamGame[]) => {
     // Check if it's an auto-collection
     if (collectionId.startsWith('auto-')) {
       const { getGamesInAutoCollection } = useAutoCollections()
