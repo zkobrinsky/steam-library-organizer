@@ -9,17 +9,12 @@ export const useInfiniteScroll = (callback: () => void, options: {
   
   const observe = () => {
     if (!target.value) {
-      console.log('No target element found for intersection observer')
       return
     }
     
-    console.log('Setting up intersection observer on:', target.value)
-    
     observer.value = new IntersectionObserver(
       ([entry]) => {
-        console.log('Intersection observer entry:', entry.isIntersecting)
         if (entry.isIntersecting) {
-          console.log('Intersection observer triggered - loading more items')
           callback()
         }
       },

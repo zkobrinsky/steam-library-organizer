@@ -11,14 +11,12 @@ export const useLazyLoading = <T>(items: Ref<T[]>, itemsPerPage: number = 20) =>
   })
   
   const loadMore = () => {
-    console.log('loadMore called:', { hasMore: hasMore.value, isLoading: isLoading.value, currentPage: currentPage.value, totalItems: items.value.length })
     if (hasMore.value && !isLoading.value) {
       isLoading.value = true
       // Simulate loading delay for better UX
       setTimeout(() => {
         currentPage.value++
         isLoading.value = false
-        console.log('Page incremented:', { newPage: currentPage.value, visibleItems: visibleItems.value.length })
       }, 100)
     }
   }

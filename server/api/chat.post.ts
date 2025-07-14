@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
 
   const config = useRuntimeConfig()
   
-  if (!config.openaiApiKey || config.openaiApiKey === 'your_openai_api_key_here') {
+  if (!config.openaiApiKey) {
     throw createError({
       statusCode: 500,
       statusMessage: 'OpenAI API key not configured'
@@ -28,10 +28,12 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const openai = new OpenAI({ apiKey: config.openaiApiKey })
+    const openai = new OpenAI({
+      apiKey: config.openaiApiKey
+    })
     
     // Analyze the user's gaming library
-    const libraryAnalysis = analyzeGameLibrary(games)
+    const libraryAnalysis = await analyzeGameLibrary(games)
     
     // Build context about their games
     const gameContext = buildGameContext(games, libraryAnalysis)
@@ -39,14 +41,16 @@ export default defineEventHandler(async (event) => {
     // Create chat messages with game context
     const chatMessages = buildChatMessages(message, gameContext, chatHistory)
     
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
+    const modelToUse = config.openaiFinetunedModel || 'gpt-4o-mini'
+    
+    const response = await openai.chat.completions.create({
+      model: modelToUse,
       messages: chatMessages,
-      temperature: 0.7,
-      max_tokens: 1000
+      max_tokens: 150,
+      temperature: 0.7
     })
 
-    const responseContent = completion.choices[0]?.message?.content
+    const responseContent = response.choices[0]?.message?.content?.trim()
     if (!responseContent) {
       throw new Error('Empty response from OpenAI')
     }
@@ -64,9 +68,12 @@ export default defineEventHandler(async (event) => {
   }
 })
 
-function analyzeGameLibrary(games: any[]) {
+async function analyzeGameLibrary(games: any[]) {
   const totalGames = games.length
   const totalPlaytime = games.reduce((sum, game) => sum + game.playtime_forever, 0)
+  
+  // Calculate collection value
+  const collectionValue = await calculateCollectionValue(games)
   
   // Top games by playtime
   const topGames = games
@@ -91,6 +98,7 @@ function analyzeGameLibrary(games: any[]) {
   return {
     totalGames,
     totalPlaytime: Math.round(totalPlaytime / 60), // Convert to hours
+    collectionValue,
     topGames: topGames.map(g => ({ name: g.name, hours: Math.round(g.playtime_forever / 60) })),
     recentGames: recentGames.map(g => ({ name: g.name, hours: Math.round((g.playtime_2weeks || 0) / 60) })),
     categories: {
@@ -117,6 +125,7 @@ function buildGameContext(games: any[], analysis: any) {
 USER'S STEAM LIBRARY CONTEXT:
 - Total games: ${analysis.totalGames}
 - Total playtime: ${analysis.totalPlaytime} hours
+- Collection value: $${analysis.collectionValue.total.toFixed(2)} (${analysis.collectionValue.currency})
 
 GAME CATEGORIZATION:
 - Unplayed games: ${analysis.categories.unplayed} (never launched)
@@ -184,4 +193,97 @@ ${gameContext}`
   }
   
   return [systemMessage, ...historyMessages, userMessage]
+}
+
+function convertMessagesToPrompt(messages: any[]) {
+  // Extract system context and conversation
+  const systemMsg = messages.find(m => m.role === 'system')
+  const conversationMsgs = messages.filter(m => m.role !== 'system')
+  
+  // Create a simplified prompt for DialoGPT
+  let prompt = ''
+  
+  // Add key context from system message
+  if (systemMsg) {
+    const gameContext = systemMsg.content.split('USER\'S STEAM LIBRARY CONTEXT:')[1]
+    if (gameContext) {
+      const lines = gameContext.split('\n').slice(0, 20) // First 20 lines of context
+      prompt += `Gaming Context: ${lines.join(' ').replace(/\s+/g, ' ').trim()}\n\n`
+    }
+  }
+  
+  // Add conversation history
+  conversationMsgs.forEach(msg => {
+    if (msg.role === 'user') {
+      prompt += `User: ${msg.content}\n`
+    } else {
+      prompt += `Assistant: ${msg.content}\n`
+    }
+  })
+  
+  prompt += 'Assistant:'
+  return prompt
+}
+
+async function calculateCollectionValue(games: any[]) {
+  try {
+    // Batch API calls for pricing data
+    const appIds = games.map(g => g.appid).slice(0, 50) // Limit to avoid rate limits
+    const pricePromises = appIds.map(appId => fetchGamePrice(appId))
+    
+    const priceResults = await Promise.allSettled(pricePromises)
+    
+    let totalValue = 0
+    let successfulPrices = 0
+    
+    priceResults.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        totalValue += result.value.price
+        successfulPrices++
+      }
+    })
+    
+    // Estimate total value based on successful price fetches
+    const estimatedTotal = games.length > 50 
+      ? (totalValue / successfulPrices) * games.length 
+      : totalValue
+    
+    return {
+      total: estimatedTotal,
+      currency: 'USD',
+      gamesWithPrices: successfulPrices,
+      totalGames: games.length,
+      estimated: games.length > 50
+    }
+  } catch (error) {
+    console.error('Error calculating collection value:', error)
+    return {
+      total: 0,
+      currency: 'USD',
+      gamesWithPrices: 0,
+      totalGames: games.length,
+      estimated: false,
+      error: 'Unable to fetch pricing data'
+    }
+  }
+}
+
+async function fetchGamePrice(appId: string) {
+  try {
+    const response = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appId}&cc=us&filters=price_overview`)
+    const data = await response.json()
+    
+    if (data[appId]?.success && data[appId]?.data?.price_overview) {
+      const priceData = data[appId].data.price_overview
+      return {
+        appId,
+        price: priceData.initial / 100, // Convert cents to dollars
+        currency: priceData.currency
+      }
+    }
+    return null
+  } catch (error) {
+    console.error(`Error fetching price for ${appId}:`, error)
+    return null
+  }
 }

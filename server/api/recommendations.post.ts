@@ -13,7 +13,7 @@ export default defineEventHandler(async (event) => {
 
   const config = useRuntimeConfig()
   
-  if (!config.openaiApiKey || config.openaiApiKey === 'your_openai_api_key_here') {
+  if (!config.openaiApiKey) {
     throw createError({
       statusCode: 500,
       statusMessage: 'OpenAI API key not configured'
@@ -22,10 +22,10 @@ export default defineEventHandler(async (event) => {
 
   try {
     // Analyze the user's gaming patterns
-    const analysis = analyzeGamingPatterns(games)
+    const analysis = await analyzeGamingPatterns(games)
     
-    // Generate AI recommendations using OpenAI
-    const aiRecommendations = await generateAIRecommendations(games, analysis, preferences, config.openaiApiKey)
+    // Generate AI recommendations using Hugging Face
+    const aiRecommendations = await generateAIRecommendations(games, analysis, preferences, config)
     
     return {
       analysis,
@@ -43,10 +43,13 @@ export default defineEventHandler(async (event) => {
   }
 })
 
-function analyzeGamingPatterns(games: any[]) {
+async function analyzeGamingPatterns(games: any[]) {
   const totalGames = games.length
   const totalPlaytime = games.reduce((sum, game) => sum + game.playtime_forever, 0)
   const averagePlaytime = totalPlaytime / totalGames
+  
+  // Calculate collection value
+  const collectionValue = await calculateCollectionValue(games)
   
   // Categorize games by playtime
   const unplayed = games.filter(g => g.playtime_forever === 0)
@@ -65,6 +68,7 @@ function analyzeGamingPatterns(games: any[]) {
     totalGames,
     totalPlaytime: Math.round(totalPlaytime / 60), // Convert to hours
     averagePlaytime: Math.round(averagePlaytime / 60),
+    collectionValue,
     categories: {
       unplayed: unplayed.length,
       shortSessions: shortSessions.length,
@@ -94,8 +98,10 @@ function getMoodContext(mood: string) {
   return moodMap[mood as keyof typeof moodMap] || 'No specific mood preference - recommend variety'
 }
 
-async function generateAIRecommendations(games: any[], analysis: any, preferences: any = {}, apiKey: string) {
-  const openai = new OpenAI({ apiKey })
+async function generateAIRecommendations(games: any[], analysis: any, preferences: any = {}, config: any) {
+  const openai = new OpenAI({
+    apiKey: config.openaiApiKey
+  })
   
   // Prepare game data for AI analysis
   const gameData = games.map(game => ({
@@ -160,56 +166,34 @@ Format your response as JSON with this structure:
 }`
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
+    // Create a simplified prompt for Flan-T5
+    const simplifiedPrompt = createFlanT5Prompt(games, analysis, preferences)
+    
+    const response = await openai.chat.completions.create({
+      model: config.openaiFinetunedModel || 'gpt-4o-mini',
       messages: [
         {
-          role: "system", 
-          content: "You are an expert gaming consultant who analyzes Steam libraries to provide personalized, insightful game recommendations. Focus on being specific and personal in your recommendations."
+          role: "system",
+          content: "You are an expert gaming advisor who helps users understand games and make informed decisions. Analyze gaming patterns, terminology, and player feedback to provide helpful insights and recommendations."
         },
         {
           role: "user",
-          content: prompt
+          content: simplifiedPrompt
         }
       ],
-      temperature: 0.7,
-      max_tokens: 2000
+      max_tokens: 300,
+      temperature: 0.7
     })
 
-    const responseContent = completion.choices[0]?.message?.content
+    const responseContent = response.choices[0]?.message?.content?.trim()
     if (!responseContent) {
       throw new Error('Empty response from OpenAI')
     }
 
-    // Parse the JSON response (handle markdown code blocks)
-    let jsonContent = responseContent.trim()
+    // Parse Flan-T5 response and convert to structured format
+    const aiRecommendations = parseFlanT5Response(responseContent, games, analysis, preferences)
     
-    // Remove markdown code blocks if present
-    if (jsonContent.startsWith('```json')) {
-      jsonContent = jsonContent.replace(/^```json\s*/, '').replace(/\s*```$/, '')
-    } else if (jsonContent.startsWith('```')) {
-      jsonContent = jsonContent.replace(/^```\s*/, '').replace(/\s*```$/, '')
-    }
-    
-    const aiResponse = JSON.parse(jsonContent)
-    
-    // Convert AI recommendations to our format
-    const formattedRecommendations = aiResponse.ownedGameRecommendations.map((rec: any) => {
-      const game = games.find(g => g.name === rec.gameName)
-      return {
-        type: rec.type,
-        title: rec.title,
-        game: game || { name: rec.gameName, playtime_forever: 0, appid: 0 },
-        reason: rec.reason,
-        confidence: rec.confidence
-      }
-    }).filter((rec: any) => rec.game.appid !== 0) // Only include games we found in library
-
-    return {
-      ownedGameRecommendations: formattedRecommendations,
-      newGameSuggestions: aiResponse.newGameSuggestions || [],
-      insights: aiResponse.insights || 'AI analysis completed successfully.'
-    }
+    return aiRecommendations
 
   } catch (error) {
     console.error('OpenAI API error:', error)
@@ -252,4 +236,157 @@ function generateFallbackRecommendations(games: any[], preferences: any) {
   }
   
   return recommendations
+}
+
+function createFlanT5Prompt(games: any[], analysis: any, preferences: any) {
+  // Create a simple conversational prompt for DialoGPT
+  const unplayed = games.filter(g => g.playtime_forever === 0).slice(0, 8)
+  const favorites = analysis.favorites.slice(0, 3)
+  const moodContext = getMoodContext(preferences.mood)
+  
+  return `User: I have ${analysis.totalGames} Steam games and want recommendations for my ${preferences.mood || 'gaming'} mood. ${moodContext}
+
+My favorites: ${favorites.map(g => g.name).join(', ')}
+Unplayed games: ${unplayed.map(g => g.name).join(', ')}
+
+What should I play?
+Assistant:`
+}
+
+function parseFlanT5Response(response: string, games: any[], analysis: any, preferences: any): any {
+  // Since Flan-T5 won't return JSON, we'll parse the text and create structured recommendations
+  const lines = response.split('\n').filter(line => line.trim())
+  const recommendations = []
+  
+  // Extract game names mentioned in the response
+  const mentionedGames = []
+  for (const game of games) {
+    if (response.toLowerCase().includes(game.name.toLowerCase())) {
+      mentionedGames.push(game)
+    }
+  }
+  
+  // Create recommendations based on mentioned games and user patterns
+  const unplayed = games.filter(g => g.playtime_forever === 0)
+  const revisitable = games.filter(g => g.playtime_forever > 300 && g.playtime_forever < 3000 && (!g.playtime_2weeks || g.playtime_2weeks === 0))
+  
+  // Add up to 4 recommendations
+  if (mentionedGames.length > 0) {
+    // Use games mentioned by AI
+    for (let i = 0; i < Math.min(3, mentionedGames.length); i++) {
+      const game = mentionedGames[i]
+      const isUnplayed = game.playtime_forever === 0
+      
+      recommendations.push({
+        type: isUnplayed ? 'discover' : 'revisit',
+        title: isUnplayed ? 'AI Suggests: Try This Unplayed Game' : 'AI Suggests: Revisit This Game',
+        game,
+        reason: `AI analysis suggests this game fits your current ${preferences.mood || 'gaming'} mood.`,
+        confidence: 0.85
+      })
+    }
+  }
+  
+  // Fill remaining slots with smart fallbacks
+  while (recommendations.length < 3) {
+    if (unplayed.length > 0 && recommendations.length < 2) {
+      const game = unplayed[Math.floor(Math.random() * unplayed.length)]
+      recommendations.push({
+        type: 'discover',
+        title: 'Unplayed Gem',
+        game,
+        reason: 'You own this but haven\'t tried it yet - perfect time to discover something new!',
+        confidence: 0.7
+      })
+      unplayed.splice(unplayed.indexOf(game), 1)
+    } else if (revisitable.length > 0) {
+      const game = revisitable[Math.floor(Math.random() * revisitable.length)]
+      recommendations.push({
+        type: 'revisit',
+        title: 'Worth Another Look',
+        game,
+        reason: `You played this for ${Math.round(game.playtime_forever / 60)} hours before. Time to continue the journey!`,
+        confidence: 0.75
+      })
+      revisitable.splice(revisitable.indexOf(game), 1)
+    } else {
+      break
+    }
+  }
+  
+  return {
+    ownedGameRecommendations: recommendations,
+    newGameSuggestions: [
+      {
+        title: 'Based on Your Library Patterns',
+        reason: 'Consider exploring similar games to your favorites',
+        genre: 'Varied',
+        estimatedHours: '10-50 hours'
+      }
+    ],
+    insights: `You have ${analysis.totalGames} games worth $${analysis.collectionValue.total.toFixed(2)} with ${analysis.totalPlaytime} hours played. ${analysis.categories.unplayed} games are waiting to be discovered!`
+  }
+}
+
+async function calculateCollectionValue(games: any[]) {
+  try {
+    // Batch API calls for pricing data
+    const appIds = games.map(g => g.appid).slice(0, 50) // Limit to avoid rate limits
+    const pricePromises = appIds.map(appId => fetchGamePrice(appId))
+    
+    const priceResults = await Promise.allSettled(pricePromises)
+    
+    let totalValue = 0
+    let successfulPrices = 0
+    
+    priceResults.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        totalValue += result.value.price
+        successfulPrices++
+      }
+    })
+    
+    // Estimate total value based on successful price fetches
+    const estimatedTotal = games.length > 50 
+      ? (totalValue / successfulPrices) * games.length 
+      : totalValue
+    
+    return {
+      total: estimatedTotal,
+      currency: 'USD',
+      gamesWithPrices: successfulPrices,
+      totalGames: games.length,
+      estimated: games.length > 50
+    }
+  } catch (error) {
+    console.error('Error calculating collection value:', error)
+    return {
+      total: 0,
+      currency: 'USD',
+      gamesWithPrices: 0,
+      totalGames: games.length,
+      estimated: false,
+      error: 'Unable to fetch pricing data'
+    }
+  }
+}
+
+async function fetchGamePrice(appId: string) {
+  try {
+    const response = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appId}&cc=us&filters=price_overview`)
+    const data = await response.json()
+    
+    if (data[appId]?.success && data[appId]?.data?.price_overview) {
+      const priceData = data[appId].data.price_overview
+      return {
+        appId,
+        price: priceData.initial / 100, // Convert cents to dollars
+        currency: priceData.currency
+      }
+    }
+    return null
+  } catch (error) {
+    console.error(`Error fetching price for ${appId}:`, error)
+    return null
+  }
 }
